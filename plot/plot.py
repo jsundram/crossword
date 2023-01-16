@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Copyright 2021 Google LLC
 #
@@ -37,7 +37,10 @@ A.add_argument('-c', '--ceiling', action='store', type=int, default=0,
 A.add_argument('-s', '--style', action='store', default="Solarize_Light2",
     type=str,  # choices=plt.style.available,  # looks gross
     help='Name of the plot style to use; must be in plt.style.available')
-
+A.add_argument('-d', '--date', action='store',
+    type=lambda s: datetime.datetime.strptime(s, '%Y-%m-%d'),
+    default=datetime.datetime(2018, 1, 1),
+    help='start date (default 2018-1-1). Discards all data before this date.')
 
 def parse_data(csv_path):
     """Parse crossword database stored at the given path into a pandas DataFrame. The DataFrame
@@ -74,15 +77,48 @@ def parse_data(csv_path):
 def save_plot(df, out_path, ymax):
     fig = plt.figure(figsize=(10, 7), dpi=200)
     today = datetime.date.today().isoformat()
+
+    start_date = min(df['Solved datetime']).strftime("%b %d, %Y")
+    end_date = max(df['Solved datetime']).strftime("%b %d, %Y")
+    puzzles = len(df)
+
     plt.title(
-        f"NYT crossword solve time (8-week rolling average) as of {today}"
+        f"{puzzles} NYT Crossword solve times from {start_date} to {end_date}"
     )
+
     ax = fig.gca()
-    for day in DAYS:
+    label_clr = ax.xaxis.label.get_color()
+    # marker options: https://matplotlib.org/stable/api/markers_api.html
+    # line styles: https://matplotlib.org/stable/gallery/lines_bars_and_markers/linestyles.html
+    for i, day in enumerate(reversed(DAYS)):
         rolling_avg = df[df["weekday"] == day]["solve_time_secs"].rolling("56D").mean()
         (rolling_avg / 60.0).plot(
-            ax=ax, label=day, linewidth=2, markersize=4, marker="o", linestyle="-"
+            ax=ax, label=day, linewidth=1.5, markersize=4, marker=".", linestyle="-"
         )
+
+        (df[df["weekday"] == day]["solve_time_secs"] / 60).plot(
+            ax=ax, label="_" + day, linewidth=1, linestyle="-", color='C%d'%i, alpha=.075,
+        )
+
+        best_ix = df[df["weekday"] == day]["solve_time_secs"].idxmin()
+        best = df.loc[best_ix]
+        avg_time_s = rolling_avg.at_time(best_ix)[0]
+        mins, secs = divmod(best.solve_time_secs, 60)
+        # would love to plot solved date datetime and solve_time_secs / 60, but that won't lie on the line.
+        ax.annotate(
+            "\t\t\t\t%s [%02d:%02d]" % (day, mins, secs),
+            xy=(best['Solved datetime'], avg_time_s / 60.0),
+            xytext=(best['Solved datetime'], best.solve_time_secs / 60.0),
+            arrowprops=dict(facecolor='#93a1a1', width=2, headwidth=6, alpha=.75, shrink=.01),
+            ha='left',
+            va='center',
+            color=label_clr,
+            fontsize='x-small' # float or {'xx-small', 'x-small', 'small', 'medium', 'large', 'x-large', 'xx-large'}
+        )
+        ax.plot([best['Solved datetime']], [best.solve_time_secs / 60.0], '*', markersize=12, color='C%d'%i)
+
+
+
     plt.legend()
 
     ax.set_xlabel("Solve Date")
@@ -94,6 +130,17 @@ def save_plot(df, out_path, ymax):
     plt.xticks(rotation=0)
 
     plt.grid(True, which="both", axis="both")
+
+    # https://swdevnotes.com/python/2020/matplotlib_add_footnote/
+
+    ax.annotate('(8 week rolling average)',
+        xy = (1.0, -0.2),
+        xycoords='axes fraction',
+        ha='right',
+        va="center",
+        fontsize=10,
+        color=label_clr,
+    )
     plt.savefig(out_path)
 
 
@@ -108,8 +155,9 @@ def save_vln_plot(df, out_path, ymax):
     df['solve_time_m'] = df['solve_time_secs'] / 60.0
     ax = sns.violinplot(x="weekday", y="solve_time_m", data=df, order=DAYS)
 
-    date = max(df['Solved datetime']).strftime("%b %d, %Y")
-    ax.set_title("%d NYT Crossword Solve Times by Day of Week as of %s" % (len(df), date))
+    start_date = min(df['Solved datetime']).strftime("%b %d, %Y")
+    end_date = max(df['Solved datetime']).strftime("%b %d, %Y")
+    ax.set_title("%d NYT Crossword Solve Times; %s to %s" % (len(df), start_date, end_date))
     ax.set_xlabel("Day of Week")
     ax.set_ylabel("Minutes to Solve")
 
@@ -123,7 +171,7 @@ def save_vln_plot(df, out_path, ymax):
 
 def save_split_vln_plot(df, out_path, ymax):
     """
-        Splits the violin plot into pre-2021 and 2021+ sections to look
+        Splits the violin plot into past year and previous sections to look
         at progress over time.
 
         df: dataframe containing crossword times
@@ -131,13 +179,14 @@ def save_split_vln_plot(df, out_path, ymax):
         ceiling: max y-value to show
     """
     df['solve_time_m'] = df['solve_time_secs'] / 60.0
-    # TODO: should probably not hard-code 2021 and instead pass in a date.
-    df['In 2021'] = df['Solved datetime'] > datetime.datetime(2021, 1, 1)
-    ax = sns.violinplot(x="weekday", y="solve_time_m", hue='In 2021',
-                        split=True, data=df, bw=.25, order=DAYS)
+    now = datetime.datetime.now()
+    df['last year'] = df['Solved datetime'] > datetime.datetime(now.year - 1, now.month, now.day)
 
-    date = max(df['Solved datetime']).strftime("%b %d, %Y")
-    ax.set_title("%d NYT Crossword Solve Times by Day of Week as of %s" % (len(df), date))
+    ax = sns.violinplot(x="weekday", y="solve_time_m", hue='last year', split=True, data=df, bw=.25, order=DAYS)
+
+    start_date = min(df['Solved datetime']).strftime("%b %d, %Y")
+    end_date = max(df['Solved datetime']).strftime("%b %d, %Y")
+    ax.set_title("%d NYT Crossword Solve Times; %s to %s" % (len(df), start_date, end_date))
     ax.set_xlabel("Day of Week")
     ax.set_ylabel("Minutes to Solve")
 
@@ -146,14 +195,21 @@ def save_split_vln_plot(df, out_path, ymax):
 
     ax.legend()  # Seems to have the effect of removing the title of the legend
     handles, labels = ax.get_legend_handles_labels()
-    ax.legend(handles, ["Before 2021", "2021"], loc="upper left")
+    ax.legend(handles, ["Before", "Past 365 days"], loc="upper left")
 
     plt.savefig(out_path)
     plt.close()
 
 
-def generate(in_file, out_file, ceiling):
+def generate(in_file, out_file, ceiling, since):
     df = parse_data(in_file)
+    df = df[df['Solved datetime'] >= since]
+
+    # Due to a glitch in the app I have a solve time of 2:03 for one wednesday.
+    # remove that from the stats
+    oops_ix = df[df["weekday"] == 'Wed']["solve_time_secs"].idxmin()
+    if df.loc[oops_ix].solve_time_secs < 125:
+        df = df.drop(oops_ix)
 
     if ceiling == 0:
         # Pick an appropriate y-axis, balancing being robust to outliers vs. showing all data
@@ -177,7 +233,7 @@ def main():
     args = A.parse_args()
 
     plt.style.use(args.style)
-    generate(args.in_file, args.out_file, args.ceiling)
+    generate(args.in_file, args.out_file, args.ceiling, args.date)
 
 
 if __name__ == "__main__":
