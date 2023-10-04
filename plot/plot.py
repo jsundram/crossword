@@ -83,7 +83,8 @@ def save_plot(df, out_path, ymax, since):
 
     cf = df[df['Solved datetime'] >= since].copy()
     start_date = min(cf['Solved datetime']).strftime("%b %d, %Y")
-    end_date = max(df['Solved datetime']).strftime("%b %d, %Y")
+    end = max(cf['Solved datetime'])
+    end_date = end.strftime("%b %d, %Y")
     puzzles = len(df)
 
     plt.title(
@@ -135,7 +136,7 @@ def save_plot(df, out_path, ymax, since):
     ax.set_yticks(minor_yticks, minor=True)
     # ax.set_yscale('log', base=2)
 
-    ax.set_xlim(since, end)
+    ax.set_xlim(since, max(df['Solved datetime']))
     # https://pandas.pydata.org/docs/user_guide/timeseries.html
     ax.set_xticks(pd.date_range(start=since, end=end, freq='QS'))
     ax.xaxis.set_minor_locator(mdates.MonthLocator(interval=1))
@@ -187,7 +188,7 @@ def save_vln_plot(df, out_path, ymax, since):
 
 def save_split_vln_plot(df, out_path, ymax, since):
     """
-        Splits the violin plot into pre-2021 and 2021+ sections to look
+        Splits the violin plot into past year and previous sections to look
         at progress over time.
 
         df: dataframe containing crossword times
@@ -197,10 +198,10 @@ def save_split_vln_plot(df, out_path, ymax, since):
 
     df = df[df['Solved datetime'] >= since].copy()
     df['solve_time_m'] = df['solve_time_secs'] / 60.0
-    # TODO: should probably not hard-code 2021 and instead pass in a date.
-    df['In 2021'] = df['Solved datetime'] > datetime.datetime(2021, 1, 1)
+    now = datetime.datetime.now()
+    df['last year'] = df['Solved datetime'] > datetime.datetime(now.year - 1, now.month, now.day)
 
-    ax = sns.violinplot(x="weekday", y="solve_time_m", hue='In 2021', split=True, data=df, bw=.25, order=DAYS)
+    ax = sns.violinplot(x="weekday", y="solve_time_m", hue='last year', split=True, data=df, bw=.25, order=DAYS)
 
     start_date = since.strftime("%b %d, %Y") # min(df['Solved datetime'])
     end_date = max(df['Solved datetime']).strftime("%b %d, %Y")
@@ -213,13 +214,13 @@ def save_split_vln_plot(df, out_path, ymax, since):
 
     ax.legend()  # Seems to have the effect of removing the title of the legend
     handles, labels = ax.get_legend_handles_labels()
-    ax.legend(handles, ["Before 2021", "2021"], loc="upper left")
+    ax.legend(handles, ["Before", "Past 365 days"], loc="upper left")
 
     plt.savefig(out_path)
     plt.close()
 
 
-def generate(in_file, out_file, ceiling=None):
+def generate(in_file, out_file, ceiling, since):
     df = parse_data(in_file)
     # df = df[df['Solved datetime'] >= since]
 
@@ -229,7 +230,7 @@ def generate(in_file, out_file, ceiling=None):
     if df.loc[oops_ix].solve_time_secs < 125:
         df = df.drop(oops_ix)
 
-    if ceiling is None:
+    if ceiling == 0:
         # Pick an appropriate y-axis, balancing being robust to outliers vs. showing all data
         ymax = df["solve_time_secs"].quantile(0.99) / 60
     else:
